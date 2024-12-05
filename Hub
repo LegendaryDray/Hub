@@ -1,0 +1,569 @@
+SX_VM_CNONE();
+
+-- // Services
+
+local libraryLoadAt = tick();
+
+local Signal = sharedRequire('utils/Signal.lua');
+local Services = sharedRequire('utils/Services.lua');
+local KeyBindVisualizer = sharedRequire('classes/KeyBindVisualizer.lua');
+
+local CoreGui, Players, RunService, TextService, UserInputService, ContentProvider, HttpService, TweenService, GuiService, TeleportService = Services:Get('CoreGui', 'Players', 'RunService', 'TextService', 'UserInputService', 'ContentProvider', 'HttpService', 'TweenService', 'GuiService', 'TeleportService');
+
+local toCamelCase = sharedRequire('utils/toCamelCase.lua');
+local Maid = sharedRequire('utils/Maid.lua');
+local ToastNotif = sharedRequire('@classes/ToastNotif.lua');
+
+local LocalPlayer = Players.LocalPlayer;
+local visualizer;
+
+if getgenv().library then
+	getgenv().library:Unload();
+end;
+
+if (not isfile('Quantum Hub V3/configs')) then
+    makefolder('Quantum Hub V3/configs');
+end;
+
+if (not isfile('Quantum Hub V3/configs/globalConf.bin')) then
+    -- By default global config is turned on
+    writefile('Quantum Hub V3/configs/globalConf.bin', 'true');
+end;
+
+local globalConfFilePath = 'Quantum Hub V3/configs/globalConf.bin';
+local isGlobalConfigOn = readfile(globalConfFilePath) == 'true';
+
+local library = {
+    unloadMaid = Maid.new(),
+	tabs = {},
+	draggable = true,
+	flags = {},
+	title = string.format('Quantum Hub | v%s', scriptVersion or 'DEBUG'),
+	open = false,
+	popup = nil,
+	instances = {},
+	connections = {},
+	options = {},
+	notifications = {},
+    configVars = {},
+	tabSize = 0,
+	theme = {},
+	foldername =  isGlobalConfigOn and 'Quantum Hub V3/configs/global' or string.format('Quantum Hub V3/configs/%s', tostring(LocalPlayer.UserId)),
+	fileext = getServerConstant('.json'),
+    chromaColor = Color3.new()
+}
+
+library.originalTitle = library.title;
+
+do -- // Load
+    library.unloadMaid:GiveTask(task.spawn(function()
+        while true do
+            for i = 1, 360 do
+                library.chromaColor = Color3.fromHSV(i / 360, 1, 1);
+                task.wait(0.1);
+            end;
+        end;
+    end));
+
+    -- if(debugMode) then
+        getgenv().library = library
+    -- end;
+
+    library.OnLoad = Signal.new();
+    library.OnKeyPress = Signal.new();
+    library.OnKeyRelease = Signal.new();
+
+    library.OnFlagChanged = Signal.new();
+
+    KeyBindVisualizer.init(library);
+
+    library.unloadMaid:GiveTask(library.OnLoad);
+    library.unloadMaid:GiveTask(library.OnKeyPress);
+    library.unloadMaid:GiveTask(library.OnKeyRelease);
+    library.unloadMaid:GiveTask(library.OnFlagChanged);
+
+    visualizer = KeyBindVisualizer.new();
+    local mouseMovement = Enum.UserInputType.MouseMovement;
+
+    --Locals
+    local dragging, dragInput, dragStart, startPos, dragObject
+
+    local blacklistedKeys = { --add or remove keys if you find the need to
+        Enum.KeyCode.Unknown,Enum.KeyCode.W,Enum.KeyCode.A,Enum.KeyCode.S,Enum.KeyCode.D,Enum.KeyCode.Slash,Enum.KeyCode.Tab,Enum.KeyCode.Escape
+    }
+    local whitelistedMouseinputs = { --add or remove mouse inputs if you find the need to
+        Enum.UserInputType.MouseButton1,Enum.UserInputType.MouseButton2,Enum.UserInputType.MouseButton3
+    }
+
+    local function onInputBegan(input, gpe)
+        local inputType = input.UserInputType;
+        if (inputType == mouseMovement) then return end;
+
+        if (UserInputService:GetFocusedTextBox()) then return end;
+        local inputKeyCode = input.KeyCode;
+
+        local fastInputObject = {
+            KeyCode = {
+                Name = inputKeyCode.Name,
+                Value = inputKeyCode.Value
+            },
+
+            UserInputType = {
+                Name = inputType.Name,
+                Value = inputType.Value
+            },
+
+            UserInputState = input.UserInputState,
+            realKeyCode = inputKeyCode,
+            realInputType = inputType
+        };
+
+        library.OnKeyPress:Fire(fastInputObject, gpe);
+    end;
+
+    local function onInputEnded(input)
+        local inputType = input.UserInputType;
+        if (inputType == mouseMovement) then return end;
+
+        local inputKeyCode = input.KeyCode;
+
+        local fastInputObject = {
+            KeyCode = {
+                Name = inputKeyCode.Name,
+                Value = inputKeyCode.Value
+            },
+
+            UserInputType = {
+                Name = inputType.Name,
+                Value = inputType.Value
+            },
+
+            UserInputState = input.UserInputState,
+            realKeyCode = inputKeyCode,
+            realInputType = inputType
+        };
+
+        library.OnKeyRelease:Fire(fastInputObject);
+    end;
+
+    library.unloadMaid:GiveTask(UserInputService.InputBegan:Connect(onInputBegan));
+    library.unloadMaid:GiveTask(UserInputService.InputEnded:Connect(onInputEnded));
+
+    local function makeTooltip(interest, option)
+        library.unloadMaid:GiveTask(interest.InputChanged:connect(function(input)
+            if input.UserInputType.Name == 'MouseMovement' then
+                if option.tip then
+                    library.tooltip.Text = option.tip;
+                    library.tooltip.Position = UDim2.new(0, input.Position.X + 26, 0, input.Position.Y + 36);
+                end;
+            end;
+        end));
+
+        library.unloadMaid:GiveTask(interest.InputEnded:connect(function(input)
+            if input.UserInputType.Name == 'MouseMovement' then
+                if option.tip then
+                    library.tooltip.Position = UDim2.fromScale(10, 10);
+                end;
+            end;
+        end));
+    end;
+
+    --Functions
+    library.round = function(num, bracket)
+        bracket = bracket or 1
+        if typeof(num) == getServerConstant('Vector2') then
+            return Vector2.new(library.round(num.X), library.round(num.Y))
+        elseif typeof(num) == getServerConstant('Color3') then
+            return library.round(num.r * 255), library.round(num.g * 255), library.round(num.b * 255)
+        else
+            return num - num % bracket;
+        end
+    end
+
+    function library:Create(class, properties)
+        properties = properties or {}
+        if not class then return end
+        local a = class == 'Square' or class == 'Line' or class == 'Text' or class == 'Quad' or class == 'Circle' or class == 'Triangle'
+        local t = a and Drawing or Instance
+        local inst = t.new(class)
+        for property, value in next, properties do
+            inst[property] = value
+        end
+        table.insert(self.instances, {object = inst, method = a})
+        return inst
+    end
+
+    function library:AddConnection(connection, name, callback)
+        callback = type(name) == 'function' and name or callback
+        connection = connection:Connect(callback)
+        self.unloadMaid:GiveTask(connection);
+        if name ~= callback then
+            self.connections[name] = connection
+        else
+            table.insert(self.connections, connection)
+        end
+        return connection
+    end
+
+    function library:Unload()
+        task.wait();
+        visualizer:Remove();
+
+        for _, o in next, self.options do
+            if o.type == 'toggle' and not string.find(string.lower(o.flag), 'panic') and o.flag ~= 'saveconfigauto' then
+                pcall(o.SetState, o, false);
+            end;
+        end;
+
+        library.unloadMaid:Destroy();
+    end
+
+    local function readFileAndDecodeIt(filePath)
+        if (not isfile(filePath)) then return; end;
+
+        local suc, fileContent = pcall(readfile, filePath);
+        if (not suc) then return; end;
+
+        local suc2, configData = pcall(HttpService.JSONDecode, HttpService, fileContent);
+        if (not suc2) then return; end;
+
+        return configData;
+    end;
+
+    local function getConfigForGame(configData)
+        local configValueName = library.gameName or 'Universal';
+
+        if (not configData[configValueName]) then
+            configData[configValueName] = {};
+        end;
+
+        return configData[configValueName];
+    end;
+
+    function library:LoadConfig(configName)
+        if (not table.find(self:GetConfigs(), configName)) then
+            return;
+        end;
+
+        local filePath = string.format('%s/%s.%s%s', self.foldername, configName, 'config', self.fileext);
+        local configData = readFileAndDecodeIt(filePath);
+        if (not configData) then print('no config', configName); return; end;
+        configData = getConfigForGame(configData);
+
+        -- Set the loaded config to the new config so we save it only when its actually loaded
+        library.loadedConfig = configName;
+        library.options.configList:SetValue(configName);
+
+        for _, option in next, self.options do
+            if (not option.hasInit or option.type == 'button' or not option.flag or option.skipflag) then
+                continue;
+            end;
+
+            local configDataVal = configData[option.flag];
+
+            if (typeof(configDataVal) == 'nil') then
+                continue;
+            end;
+
+            if (option.type == 'toggle') then
+                task.spawn(option.SetState, option, configDataVal == 1);
+            elseif (option.type == 'color') then
+                task.spawn(option.SetColor, option, Color3.fromHex(configDataVal));
+
+                if option.trans then
+                    task.spawn(option.SetTrans, option, configData[option.flag .. 'Transparency']);
+                end;
+            elseif (option.type == 'bind') then
+                task.spawn(option.SetKeys, option, configDataVal);
+            else
+                task.spawn(option.SetValue, option, configDataVal);
+            end;
+        end;
+
+        return true;
+    end;
+
+    function library:SaveConfig(configName)
+        local filePath = string.format('%s/%s.%s%s', self.foldername, configName, 'config', self.fileext);
+        local allConfigData = readFileAndDecodeIt(filePath) or {};
+
+        if (allConfigData.configVersion ~= '1') then
+            allConfigData = {};
+            allConfigData.configVersion = '1';
+        end;
+
+        local configData = getConfigForGame(allConfigData);
+
+        debug.profilebegin('Set config value');
+        for _, option in next, self.options do
+            if (option.type == 'button' or not option.flag) then continue end;
+            if (option.skipflag or option.noSave) then continue end;
+
+            local flag = option.flag;
+
+            if (option.type == 'toggle') then
+                configData[flag] = option.state and 1 or 0;
+            elseif (option.type == 'color') then
+                configData[flag] = option.color:ToHex();
+                if (not option.trans) then continue end;
+                configData[flag .. 'Transparency'] = option.trans;
+            elseif (option.type == 'bind' and option.key ~= 'none') then
+                local toSave = {};
+                for _, v in next, option.keys do
+                    table.insert(toSave, v.Name);
+                end;
+
+                configData[flag] = toSave;
+            elseif (option.type == 'list') then
+                configData[flag] = option.value;
+            elseif (option.type == 'box' and option.value ~= 'nil' and option.value ~= '') then
+                configData[flag] = option.value;
+            else
+                configData[flag] = option.value;
+            end;
+        end;
+        debug.profileend();
+
+        local configVars = library.configVars;
+        configVars.config = configName;
+
+        debug.profilebegin('writefile');
+        writefile(self.foldername .. '/' .. self.fileext, HttpService:JSONEncode(configVars));
+        debug.profileend();
+
+        debug.profilebegin('writefile');
+        writefile(filePath, HttpService:JSONEncode(allConfigData));
+        debug.profileend();
+    end
+
+    function library:GetConfigs()
+        if not isfolder(self.foldername) then
+            makefolder(self.foldername)
+        end
+
+        local configFiles = {};
+
+        for i, v in next, listfiles(self.foldername) do
+            local fileName = v:match('\\(.+)');
+            local fileSubExtension = v:match('%.(.+)%.json');
+
+            if (fileSubExtension == 'config') then
+                table.insert(configFiles, fileName:match('(.-)%.config'));
+            end;
+        end;
+
+        if (not table.find(configFiles, 'default')) then
+            table.insert(configFiles, 'default');
+        end;
+
+        return configFiles;
+    end
+
+    function library:UpdateConfig()
+        if (not library.hasInit) then return end;
+        debug.profilebegin('Config Save');
+
+        library:SaveConfig(library.loadedConfig or 'default');
+
+        debug.profileend();
+    end;
+
+    local function createLabel(option, parent)
+        option.main = library:Create('TextLabel', {
+            LayoutOrder = option.position,
+            Position = UDim2.new(0, 6, 0, 0),
+            Size = UDim2.new(1, -12, 0, 24),
+            BackgroundTransparency = 1,
+            TextSize = 15,
+            Font = Enum.Font.Code,
+            TextColor3 = Color3.new(1, 1, 1),
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextYAlignment = Enum.TextYAlignment.Top,
+            TextWrapped = true,
+            RichText = true,
+            Parent = parent
+        })
+
+        setmetatable(option, {__newindex = function(t, i, v)
+            if i == 'Text' then
+                option.main.Text = tostring(v)
+
+                local textSize = TextService:GetTextSize(option.main.ContentText, 15, Enum.Font.Code, Vector2.new(option.main.AbsoluteSize.X, 9e9));
+                option.main.Size = UDim2.new(1, -12, 0, textSize.Y);
+            end
+        end})
+
+        option.Text = option.text
+    end
+
+    local function createDivider(option, parent)
+        option.main = library:Create('Frame', {
+            LayoutOrder = option.position,
+            Size = UDim2.new(1, 0, 0, 18),
+            BackgroundTransparency = 1,
+            Parent = parent
+        })
+
+        library:Create('Frame', {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.new(0.5, 0, 0.5, 0),
+            Size = UDim2.new(1, -24, 0, 1),
+            BackgroundColor3 = Color3.fromRGB(60, 60, 60),
+            BorderColor3 = Color3.new(),
+            Parent = option.main
+        })
+
+        option.title = library:Create('TextLabel', {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.new(0.5, 0, 0.5, 0),
+            BackgroundColor3 = Color3.fromRGB(30, 30, 30),
+            BorderSizePixel = 0,
+            TextColor3 =  Color3.new(1, 1, 1),
+            TextSize = 15,
+            Font = Enum.Font.Code,
+            TextXAlignment = Enum.TextXAlignment.Center,
+            Parent = option.main
+        })
+
+        local interest = option.main;
+        makeTooltip(interest, option);
+
+        setmetatable(option, {__newindex = function(t, i, v)
+            if i == 'Text' then
+                if v then
+                    option.title.Text = tostring(v)
+                    option.title.Size = UDim2.new(0, TextService:GetTextSize(option.title.Text, 15, Enum.Font.Code, Vector2.new(9e9, 9e9)).X + 12, 0, 20)
+                    option.main.Size = UDim2.new(1, 0, 0, 18)
+                else
+                    option.title.Text = ''
+                    option.title.Size = UDim2.new()
+                    option.main.Size = UDim2.new(1, 0, 0, 6)
+                end
+            end
+        end})
+        option.Text = option.text
+    end
+
+    local function createToggle(option, parent)
+        option.hasInit = true
+        option.onStateChanged = Signal.new();
+
+        option.main = library:Create('Frame', {
+            LayoutOrder = option.position,
+            Size = UDim2.new(1, 0, 0, 0),
+            BackgroundTransparency = 1,
+            AutomaticSize = Enum.AutomaticSize.Y,
+            Parent = parent
+        })
+
+        local tickbox
+        local tickboxOverlay
+        if option.style then
+            tickbox = library:Create('ImageLabel', {
+                Position = UDim2.new(0, 6, 0, 4),
+                Size = UDim2.new(0, 12, 0, 12),
+                BackgroundTransparency = 1,
+                Image = 'rbxassetid://3570695787',
+                ImageColor3 = Color3.new(),
+                Parent = option.main
+            })
+
+            library:Create('ImageLabel', {
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                Position = UDim2.new(0.5, 0, 0.5, 0),
+                Size = UDim2.new(1, -2, 1, -2),
+                BackgroundTransparency = 1,
+                Image = 'rbxassetid://3570695787',
+                ImageColor3 = Color3.fromRGB(60, 60, 60),
+                Parent = tickbox
+            })
+
+            library:Create('ImageLabel', {
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                Position = UDim2.new(0.5, 0, 0.5, 0),
+                Size = UDim2.new(1, -6, 1, -6),
+                BackgroundTransparency = 1,
+                Image = 'rbxassetid://3570695787',
+                ImageColor3 = Color3.fromRGB(40, 40, 40),
+                Parent = tickbox
+            })
+
+            tickboxOverlay = library:Create('ImageLabel', {
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                Position = UDim2.new(0.5, 0, 0.5, 0),
+                Size = UDim2.new(1, -6, 1, -6),
+                BackgroundTransparency = 1,
+                Image = 'rbxassetid://3570695787',
+                ImageColor3 = library.flags.menuAccentColor,
+                Visible = option.state,
+                Parent = tickbox
+            })
+
+            library:Create('ImageLabel', {
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                Position = UDim2.new(0.5, 0, 0.5, 0),
+                Size = UDim2.new(1, 0, 1, 0),
+                BackgroundTransparency = 1,
+                Image = 'rbxassetid://5941353943',
+                ImageTransparency = 0.6,
+                Parent = tickbox
+            })
+
+            table.insert(library.theme, tickboxOverlay)
+        else
+            tickbox = library:Create('Frame', {
+                Position = UDim2.new(0, 6, 0, 4),
+                Size = UDim2.new(0, 12, 0, 12),
+                BackgroundColor3 = library.flags.menuAccentColor,
+                BorderColor3 = Color3.new(),
+                Parent = option.main
+            })
+
+            tickboxOverlay = library:Create('ImageLabel', {
+                Size = UDim2.new(1, 0, 1, 0),
+                BackgroundTransparency = option.state and 1 or 0,
+                BackgroundColor3 = Color3.fromRGB(50, 50, 50),
+                BorderColor3 = Color3.new(),
+                Image = 'rbxassetid://4155801252',
+                ImageTransparency = 0.6,
+                ImageColor3 = Color3.new(),
+                Parent = tickbox
+            })
+
+            library:Create('ImageLabel', {
+                Size = UDim2.new(1, 0, 1, 0),
+                BackgroundTransparency = 1,
+                Image = 'rbxassetid://2592362371',
+                ImageColor3 = Color3.fromRGB(60, 60, 60),
+                ScaleType = Enum.ScaleType.Slice,
+                SliceCenter = Rect.new(2, 2, 62, 62),
+                Parent = tickbox
+            })
+
+            library:Create('ImageLabel', {
+                Size = UDim2.new(1, -2, 1, -2),
+                Position = UDim2.new(0, 1, 0, 1),
+                BackgroundTransparency = 1,
+                Image = 'rbxassetid://2592362371',
+                ImageColor3 = Color3.new(),
+                ScaleType = Enum.ScaleType.Slice,
+                SliceCenter = Rect.new(2, 2, 62, 62),
+                Parent = tickbox
+            })
+
+            table.insert(library.theme, tickbox)
+        end
+
+        option.interest = library:Create('Frame', {
+            Position = UDim2.new(0, 0, 0, 0),
+            Size = UDim2.new(1, 0, 0, 20),
+            BackgroundTransparency = 1,
+            Parent = option.main
+        })
+
+        option.title = library:Create('TextLabel', {
+            Position = UDim2.new(0, 24, 0, 0),
+            Size = UDim2.new(1, 0, 1, 0),
+            BackgroundTransparency = 1,
+            Text = option.text,
+        
